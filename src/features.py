@@ -41,6 +41,11 @@ def normalize_url(url: str) -> str:
     return f"{scheme}://{host}"
 
 
+def get_suffix(url: str) -> str:
+    """Return the registered public suffix (TLD), lowercased — e.g. 'com', 'co.uk', 'ml'."""
+    return tldextract.extract(url).suffix.lower()
+
+
 def _shannon_entropy(s: str) -> float:
     if not s:
         return 0.0

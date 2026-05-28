@@ -20,10 +20,27 @@ sys.path.insert(0, str(ROOT / "src"))
 from features import (  # noqa: E402
     FEATURE_NAMES,
     extract_lexical_features,
+    get_suffix,
     normalize_url,
 )
 
 MODEL_PATH = ROOT / "models" / "hybrid_lgbm.joblib"
+
+# Free / heavily-abused TLDs (Freenom free TLDs + notoriously cheap gTLDs).
+# Phishing uses these disproportionately; a short TLD is NOT the same as a
+# reputable one.
+_ABUSED_TLDS = {
+    "tk", "ml", "ga", "cf", "gq", "top", "xyz", "work", "click", "link",
+    "gdn", "country", "kim", "loan", "win", "bid", "date", "stream",
+    "download", "racing", "science", "party", "review", "zip", "mov", "rest",
+}
+# Well-established TLDs we're comfortable calling a (mild) legit-leaning cue.
+_REPUTABLE_TLDS = {
+    "com", "org", "net", "edu", "gov", "mil", "int", "co.uk", "ac.uk",
+    "gov.uk", "com.au", "edu.au", "uk", "us", "ca", "de", "fr", "jp", "au",
+    "nl", "es", "it", "se", "ch", "eu", "no", "fi", "dk", "be", "at", "ie",
+    "nz", "in", "br", "pl", "cz", "pt",
+}
 
 st.set_page_config(
     page_title="Phishing URL Detector",
@@ -58,7 +75,9 @@ def score_url(url: str, bundle: dict) -> dict:
     }
 
 
-def collect_signals(feats: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+def collect_signals(
+    feats: dict, url: str
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Heuristic interpretation of the extracted features.
 
     Returns (red_flags, green_flags) where each entry is (label, detail).
@@ -67,6 +86,9 @@ def collect_signals(feats: dict) -> tuple[list[tuple[str, str]], list[tuple[str,
     """
     red: list[tuple[str, str]] = []
     green: list[tuple[str, str]] = []
+
+    suffix = get_suffix(url)
+    tld_last = suffix.split(".")[-1] if suffix else ""
 
     # Boolean red flags
     if feats["has_ip_host"]:
@@ -110,6 +132,9 @@ def collect_signals(feats: dict) -> tuple[list[tuple[str, str]], list[tuple[str,
     if feats["num_query_params"] >= 4:
         red.append((f"Many query parameters ({int(feats['num_query_params'])})",
                     "Phishing kits often pass tracking IDs"))
+    if tld_last in _ABUSED_TLDS:
+        red.append((f"Free/abused TLD (.{suffix})",
+                    "TLDs like .tk / .ml / .gq are free and heavily abused by phishing"))
 
     # Positive (legit-leaning) signals
     if feats["is_https"]:
@@ -120,9 +145,9 @@ def collect_signals(feats: dict) -> tuple[list[tuple[str, str]], list[tuple[str,
     if feats["num_suspicious_keywords"] == 0:
         green.append(("No suspicious keywords",
                       "URL doesn't mention login/verify/bank/etc."))
-    if not feats["has_ip_host"] and feats["tld_length"] in (2, 3):
-        green.append((f"Standard TLD (.{int(feats['tld_length'])}-char)",
-                      "Common, well-established TLD"))
+    if not feats["has_ip_host"] and suffix in _REPUTABLE_TLDS:
+        green.append((f"Well-established TLD (.{suffix})",
+                      "Common, reputable TLD"))
 
     return red, green
 
@@ -221,7 +246,7 @@ if go and url:
 
     st.divider()
 
-    red, green = collect_signals(result["features"])
+    red, green = collect_signals(result["features"], result["normalized_url"])
 
     col_l, col_r = st.columns(2)
 
