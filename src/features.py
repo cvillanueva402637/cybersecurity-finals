@@ -13,6 +13,14 @@ from urllib.parse import urlparse
 
 import tldextract
 
+# Offline TLD extraction: use tldextract's bundled public-suffix snapshot only.
+# By default tldextract fetches the suffix list over the network and writes a
+# disk cache on first use, which fails in sandboxed / offline deploys (e.g.
+# Streamlit Community Cloud). Because FEATURE_NAMES below is computed at import
+# time (it calls extract_lexical_features), that failure would break importing
+# this module entirely. suffix_list_urls=() forces the bundled snapshot.
+_TLD = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+
 _SUSPICIOUS_KEYWORDS = (
     "login", "signin", "sign-in", "verify", "verification", "secure", "account",
     "update", "confirm", "bank", "paypal", "ebay", "webscr", "wallet", "free",
@@ -43,7 +51,7 @@ def normalize_url(url: str) -> str:
 
 def get_suffix(url: str) -> str:
     """Return the registered public suffix (TLD), lowercased — e.g. 'com', 'co.uk', 'ml'."""
-    return tldextract.extract(url).suffix.lower()
+    return _TLD(url).suffix.lower()
 
 
 def _shannon_entropy(s: str) -> float:
@@ -67,7 +75,7 @@ def extract_lexical_features(url: str) -> dict:
     path = parsed.path
     query = parsed.query
 
-    ext = tldextract.extract(url)
+    ext = _TLD(url)
     domain = ext.domain
     subdomain = ext.subdomain
     suffix = ext.suffix
