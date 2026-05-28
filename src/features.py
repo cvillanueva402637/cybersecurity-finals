@@ -26,6 +26,21 @@ _IP_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 _HEX_RE = re.compile(r"%[0-9A-Fa-f]{2}")
 
 
+def normalize_url(url: str) -> str:
+    """Collapse a URL to ``scheme://host``, dropping path, query, and fragment.
+
+    The PhiUSIIL legit set is entirely bare domains while phishing URLs often
+    carry paths, so a full-URL model trivially learns "has a path -> phishing".
+    Training and serving on the host only removes that artifact, turning this
+    into an honest domain-level classifier.
+    """
+    url = url.strip()
+    parsed = urlparse(url if "://" in url else "http://" + url)
+    scheme = parsed.scheme or "http"
+    host = parsed.netloc.lower()
+    return f"{scheme}://{host}"
+
+
 def _shannon_entropy(s: str) -> float:
     if not s:
         return 0.0

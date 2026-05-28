@@ -17,7 +17,11 @@ from scipy.sparse import csr_matrix, hstack
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from features import FEATURE_NAMES, extract_lexical_features  # noqa: E402
+from features import (  # noqa: E402
+    FEATURE_NAMES,
+    extract_lexical_features,
+    normalize_url,
+)
 
 MODEL_PATH = ROOT / "models" / "hybrid_lgbm.joblib"
 
@@ -34,10 +38,12 @@ def load_bundle():
 
 
 def score_url(url: str, bundle: dict) -> dict:
-    feats = extract_lexical_features(url)
+    # Domain-level model: judge the host, not the path (see normalize_url).
+    norm = normalize_url(url)
+    feats = extract_lexical_features(norm)
     F = pd.DataFrame([feats], columns=FEATURE_NAMES).astype(np.float32)
 
-    T = bundle["vectorizer"].transform([url])
+    T = bundle["vectorizer"].transform([norm])
     F_s = bundle["scaler"].transform(F)
     X = hstack([T, csr_matrix(F_s)]).tocsr()
 
@@ -48,6 +54,7 @@ def score_url(url: str, bundle: dict) -> dict:
         "p_legit": p_legit,
         "p_phish": 1.0 - p_legit,
         "features": feats,
+        "normalized_url": norm,
     }
 
 
@@ -120,12 +127,60 @@ def collect_signals(feats: dict) -> tuple[list[tuple[str, str]], list[tuple[str,
     return red, green
 
 
+# Background colors for the feature table (light red / yellow / green).
+_CELL_RED = "background-color:#f8d7da;color:#111"
+_CELL_YELLOW = "background-color:#fff3cd;color:#111"
+_CELL_GREEN = "background-color:#d4edda;color:#111"
+
+
+def _feature_verdict(name: str, value: float) -> str:
+    """Rule-of-thumb read on one handcrafted feature value.
+
+    Returns 'red' (unusual / phish-leaning), 'yellow' (borderline),
+    'green' (normal / legit-leaning), or '' (no simple rule).
+    Mirrors the thresholds used in collect_signals().
+    """
+    v = float(value)
+    if name in ("has_ip_host", "is_shortener", "has_at_symbol",
+                "has_double_slash_in_path", "has_suspicious_keyword"):
+        return "red" if v >= 1 else "green"
+    if name == "is_https":
+        return "green" if v >= 1 else "red"
+    if name == "num_suspicious_keywords":
+        return "green" if v == 0 else ("yellow" if v <= 2 else "red")
+    if name == "url_length":
+        return "green" if v <= 40 else ("yellow" if v <= 100 else "red")
+    if name == "num_dots":
+        return "green" if v <= 3 else ("yellow" if v == 4 else "red")
+    if name == "num_dashes":
+        return "green" if v <= 1 else ("yellow" if v <= 3 else "red")
+    if name == "digit_ratio":
+        return "green" if v <= 0.15 else ("yellow" if v <= 0.30 else "red")
+    if name == "host_entropy":
+        return "green" if v <= 3.5 else ("yellow" if v <= 4.5 else "red")
+    if name == "num_hex_escapes":
+        return "green" if v == 0 else ("yellow" if v <= 2 else "red")
+    if name == "num_query_params":
+        return "green" if v <= 1 else ("yellow" if v <= 3 else "red")
+    return ""
+
+
+def _style_feature_table(df: pd.DataFrame):
+    colors = {"red": _CELL_RED, "yellow": _CELL_YELLOW, "green": _CELL_GREEN}
+
+    def _row(r):
+        return ["", colors.get(_feature_verdict(r["feature"], r["value"]), "")]
+
+    return df.style.apply(_row, axis=1)
+
+
 # ---------------------------------------------------------------------- UI ---
 
 st.title("🛡️ Phishing URL Detector")
 st.caption(
     "Hybrid model — char TF-IDF n-grams + 37 handcrafted lexical features → LightGBM. "
-    "Trained on the PhiUSIIL dataset (235K URLs)."
+    "Domain-level: a URL is judged by its host (`scheme://host`), not its path. "
+    "Trained on the PhiUSIIL dataset."
 )
 
 if not MODEL_PATH.exists():
@@ -151,6 +206,10 @@ if go and url:
 
     p_phish = result["p_phish"]
     verdict_phish = p_phish >= 0.5
+
+    if result["normalized_url"] != url.strip():
+        st.caption(f"Analyzed domain: `{result['normalized_url']}` "
+                   "(path & query ignored — this is a domain-level model)")
 
     if verdict_phish:
         st.error(f"### ⚠️ Likely PHISHING  ({p_phish:.1%} confidence)")
@@ -190,17 +249,26 @@ if go and url:
         "addition to these 37."
     )
 
-    with st.expander("All 37 handcrafted feature values"):
-        feat_df = pd.DataFrame(
-            sorted(result["features"].items()),
-            columns=["feature", "value"],
-        )
-        st.dataframe(feat_df, hide_index=True, use_container_width=True)
+    st.subheader("All 37 handcrafted feature values")
+    st.caption(
+        "Cell colour is a rule-of-thumb read on each value — "
+        "🟥 unusual / phish-leaning · 🟨 borderline · 🟩 normal · "
+        "uncoloured = no simple rule."
+    )
+    feat_df = pd.DataFrame(
+        sorted(result["features"].items()),
+        columns=["feature", "value"],
+    )
+    st.dataframe(
+        _style_feature_table(feat_df),
+        hide_index=True,
+        width="stretch",
+    )
 
 st.divider()
-with st.expander("About this demo"):
-    st.markdown(
-        """
+st.subheader("About this demo")
+st.markdown(
+    """
         **Base paper:** Sánchez-Paniagua et al. (2022), *Phishing URL Detection: A
         Real-Case Scenario Through Login URLs*, IEEE Access.
         DOI: [10.1109/ACCESS.2022.3168681](https://doi.org/10.1109/ACCESS.2022.3168681)
@@ -210,12 +278,20 @@ with st.expander("About this demo"):
         **Methodology:**
         - Baseline (paper): Logistic Regression on char-level TF-IDF n-grams (3-5)
         - This app (improvement): same TF-IDF + 37 handcrafted lexical features →
-          LightGBM. Catches ~41 % more phishing URLs than the baseline at the cost
-          of 1 extra false alarm on the held-out test set.
+          LightGBM.
 
-        **Limitations:** URL-only — no DNS, WHOIS, or HTML content. Trained
-        distribution is PhiUSIIL; performance on URLs from outside this
-        distribution (e.g., fresh phishing kits, internationalised domain names)
+        **A note on data leakage (domain-level model):** In raw PhiUSIIL every
+        *legitimate* URL is a bare domain while many *phishing* URLs carry a
+        path. A full-URL model exploits this and scores ~100 % phishing for any
+        URL with a path — even obviously legitimate ones. To avoid that, this
+        app normalises every URL to `scheme://host` and the model is trained and
+        evaluated on the **host only**. Predictions therefore reflect the
+        domain's characteristics, not whether you happened to paste a path.
+
+        **Limitations:** URL-only — no DNS, WHOIS, or HTML content, and the path
+        is intentionally ignored (so a legitimate domain hosting a malicious
+        page won't be caught). Trained distribution is PhiUSIIL; performance on
+        URLs from outside it (fresh phishing kits, internationalised domains)
         may be worse.
         """
     )
