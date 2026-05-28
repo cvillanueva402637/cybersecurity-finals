@@ -44,27 +44,80 @@ def score_url(url: str, bundle: dict) -> dict:
     clf = bundle["classifier"]
     p_legit = float(clf.predict_proba(X)[0, 1])
 
-    # Per-prediction feature contributions (SHAP-like). Last column is bias.
-    contribs = clf.predict(X, pred_contrib=True, raw_score=True)[0]
-    n_hand = len(FEATURE_NAMES)
-    hand_contribs = contribs[-(n_hand + 1):-1]
-    bias = contribs[-1]
-    tfidf_contrib_total = contribs[:-(n_hand + 1)].sum()
-
-    contrib_df = pd.DataFrame({
-        "feature": FEATURE_NAMES,
-        "value": [feats[k] for k in FEATURE_NAMES],
-        "contribution": hand_contribs,
-    })
-
     return {
         "p_legit": p_legit,
         "p_phish": 1.0 - p_legit,
         "features": feats,
-        "contrib_df": contrib_df,
-        "bias": bias,
-        "tfidf_contrib_total": tfidf_contrib_total,
     }
+
+
+def collect_signals(feats: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Heuristic interpretation of the extracted features.
+
+    Returns (red_flags, green_flags) where each entry is (label, detail).
+    These are not the LightGBM model's actual contributions — they are
+    rule-based interpretive cues for the human reviewing the prediction.
+    """
+    red: list[tuple[str, str]] = []
+    green: list[tuple[str, str]] = []
+
+    # Boolean red flags
+    if feats["has_ip_host"]:
+        red.append(("Uses a raw IP address as host",
+                    "Legitimate sites use domain names, not IPs"))
+    if not feats["is_https"]:
+        red.append(("No HTTPS",
+                    "Most legitimate sites use HTTPS today"))
+    if feats["is_shortener"]:
+        red.append(("URL shortener detected",
+                    "Hides the real destination from the user"))
+    if feats["has_at_symbol"]:
+        red.append(("Contains '@' in the URL",
+                    "Classic technique to hide the true destination"))
+    if feats["has_double_slash_in_path"]:
+        red.append(("'//' inside the URL path",
+                    "Often used to confuse URL parsers"))
+    if feats["num_suspicious_keywords"] > 0:
+        red.append((f"{int(feats['num_suspicious_keywords'])} suspicious keyword(s)",
+                    "e.g., login, verify, secure, account, bank, paypal …"))
+
+    # Numeric red flags (rules of thumb)
+    if feats["url_length"] > 100:
+        red.append((f"Very long URL ({int(feats['url_length'])} chars)",
+                    "Phishing URLs often pad with junk"))
+    if feats["num_dots"] >= 5:
+        red.append((f"Many dots ({int(feats['num_dots'])})",
+                    "Excess subdomains can hide the real domain"))
+    if feats["digit_ratio"] > 0.30:
+        red.append((f"High digit ratio ({feats['digit_ratio']:.0%})",
+                    "Random-looking strings often have many digits"))
+    if feats["num_dashes"] >= 4:
+        red.append((f"Many dashes ({int(feats['num_dashes'])})",
+                    "Brand-impersonation domains often hyphenate"))
+    if feats["host_entropy"] > 4.5:
+        red.append((f"High host entropy ({feats['host_entropy']:.2f})",
+                    "Indicates random-looking subdomain — common in DGA"))
+    if feats["num_hex_escapes"] >= 3:
+        red.append((f"{int(feats['num_hex_escapes'])} %-encoded characters",
+                    "May be obfuscating intent"))
+    if feats["num_query_params"] >= 4:
+        red.append((f"Many query parameters ({int(feats['num_query_params'])})",
+                    "Phishing kits often pass tracking IDs"))
+
+    # Positive (legit-leaning) signals
+    if feats["is_https"]:
+        green.append(("HTTPS in use", "Encrypted transport"))
+    if feats["url_length"] <= 40 and feats["query_length"] == 0:
+        green.append(("Short, query-less URL",
+                      "Typical of legitimate homepages"))
+    if feats["num_suspicious_keywords"] == 0:
+        green.append(("No suspicious keywords",
+                      "URL doesn't mention login/verify/bank/etc."))
+    if not feats["has_ip_host"] and feats["tld_length"] in (2, 3):
+        green.append((f"Standard TLD (.{int(feats['tld_length'])}-char)",
+                      "Common, well-established TLD"))
+
+    return red, green
 
 
 # ---------------------------------------------------------------------- UI ---
@@ -108,42 +161,41 @@ if go and url:
 
     st.divider()
 
+    red, green = collect_signals(result["features"])
+
     col_l, col_r = st.columns(2)
 
     with col_l:
-        st.subheader("Top handcrafted signals")
-        st.caption(
-            "Positive contribution → pushes toward **legit**; "
-            "negative → pushes toward **phish**."
-        )
-        top = (result["contrib_df"]
-               .reindex(result["contrib_df"]["contribution"].abs()
-                        .sort_values(ascending=False).index)
-               .head(10)
-               .reset_index(drop=True))
-        st.dataframe(
-            top.style.format({"value": "{:.3f}", "contribution": "{:+.3f}"})
-                      .background_gradient(subset=["contribution"], cmap="RdYlGn"),
-            hide_index=True,
-            use_container_width=True,
-        )
+        st.subheader("🚩 Phish-leaning signals")
+        if red:
+            for label, detail in red:
+                st.markdown(f"- **{label}**  \n  <small>{detail}</small>",
+                            unsafe_allow_html=True)
+        else:
+            st.markdown("_(none triggered)_")
 
     with col_r:
-        st.subheader("Score breakdown")
-        st.metric("Bias (model prior, log-odds legit)", f"{result['bias']:+.3f}")
-        st.metric("Σ char-ngram TF-IDF contribution", f"{result['tfidf_contrib_total']:+.3f}")
-        st.metric("Σ handcrafted contribution",
-                  f"{result['contrib_df']['contribution'].sum():+.3f}")
+        st.subheader("✅ Legit-leaning signals")
+        if green:
+            for label, detail in green:
+                st.markdown(f"- **{label}**  \n  <small>{detail}</small>",
+                            unsafe_allow_html=True)
+        else:
+            st.markdown("_(none)_")
+
+    st.caption(
+        "Signals above are **rule-of-thumb interpretations** of the URL's features — "
+        "they help explain *what's unusual*, but the final verdict comes from the "
+        "trained LightGBM model, which weighs ~200,000 char-ngram features in "
+        "addition to these 37."
+    )
 
     with st.expander("All 37 handcrafted feature values"):
-        st.dataframe(
-            pd.DataFrame(
-                sorted(result["features"].items()),
-                columns=["feature", "value"],
-            ),
-            hide_index=True,
-            use_container_width=True,
+        feat_df = pd.DataFrame(
+            sorted(result["features"].items()),
+            columns=["feature", "value"],
         )
+        st.dataframe(feat_df, hide_index=True, use_container_width=True)
 
 st.divider()
 with st.expander("About this demo"):
