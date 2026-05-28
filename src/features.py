@@ -36,7 +36,7 @@ def normalize_url(url: str) -> str:
     """
     url = url.strip()
     parsed = urlparse(url if "://" in url else "http://" + url)
-    scheme = parsed.scheme or "http"
+    scheme = (parsed.scheme or "http").lower()
     host = parsed.netloc.lower()
     return f"{scheme}://{host}"
 

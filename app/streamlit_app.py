@@ -169,7 +169,8 @@ def _style_feature_table(df: pd.DataFrame):
     colors = {"red": _CELL_RED, "yellow": _CELL_YELLOW, "green": _CELL_GREEN}
 
     def _row(r):
-        return ["", colors.get(_feature_verdict(r["feature"], r["value"]), "")]
+        # Features with no rule-of-thumb default to green (normal).
+        return ["", colors.get(_feature_verdict(r["feature"], r["value"]), _CELL_GREEN)]
 
     return df.style.apply(_row, axis=1)
 
@@ -252,8 +253,7 @@ if go and url:
     st.subheader("All 37 handcrafted feature values")
     st.caption(
         "Cell colour is a rule-of-thumb read on each value — "
-        "🟥 unusual / phish-leaning · 🟨 borderline · 🟩 normal · "
-        "uncoloured = no simple rule."
+        "🟥 unusual / phish-leaning · 🟨 borderline · 🟩 normal."
     )
     feat_df = pd.DataFrame(
         sorted(result["features"].items()),
