@@ -1,0 +1,19 @@
+# Full local/dev environment: runtime deps + notebooks, EDA, training tools.
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Notebooks
+jupyter>=1.0
+ipykernel>=6.29
+notebook>=7.2
+
+# Plotting / EDA
+matplotlib>=3.8
+seaborn>=0.13
+
+# Feature engineering helpers (notebooks)
+python-Levenshtein>=0.25
+
+# Utilities
+tqdm>=4.66
+requests>=2.32

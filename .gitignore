@@ -21,6 +21,8 @@ models/*.pkl
 models/*.joblib
 models/*.pt
 models/*.bin
+# ...except the model the deployed Streamlit app needs
+!models/hybrid_lgbm.joblib
 
 # Streamlit
 .streamlit/secrets.toml

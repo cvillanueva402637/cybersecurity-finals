@@ -1,27 +1,12 @@
-# Core ML
-numpy>=1.26,<3
-pandas>=2.2
-scipy>=1.12
-scikit-learn>=1.5
-lightgbm>=4.3
-joblib>=1.4
-
-# URL parsing / feature engineering
-tldextract>=5.1
-python-Levenshtein>=0.25
-
-# Notebooks
-jupyter>=1.0
-ipykernel>=6.29
-notebook>=7.2
-
-# Plotting / EDA
-matplotlib>=3.8
-seaborn>=0.13
-
-# Streamlit demo
-streamlit>=1.36
-
-# Utilities
-tqdm>=4.66
-requests>=2.32
+# Runtime dependencies for the Streamlit app.
+# Streamlit Community Cloud installs exactly these.
+# Pinned to the versions the model was trained/pickled with so unpickling is
+# consistent on the host. For notebook/training work, see requirements-dev.txt.
+streamlit==1.57.0
+scikit-learn==1.8.0
+lightgbm==4.6.0
+joblib==1.5.3
+numpy==2.4.6
+pandas==3.0.3
+scipy==1.17.1
+tldextract==5.3.1
